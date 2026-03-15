@@ -10,6 +10,7 @@ app.use(express.json());
 
 app.use("/", downloadRoute);
 
-app.listen(3001, () => {
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => {
   console.log("Servidor rodando na porta 3001");
 });
