@@ -11,7 +11,7 @@ async function downloadMusic(url) {
     addMetadata: true,
     writeThumbnail: true,
     embedThumbnail: true,
-    output
+    output,
   });
 
   return "Download finalizado";
