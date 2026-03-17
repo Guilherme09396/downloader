@@ -150,7 +150,7 @@ router.post("/search", async (req, res) => {
     res.json(tracks);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Erro ao buscar músicas" });
+    res.status(500).json({ error: err });
   }
 });
 
@@ -202,7 +202,7 @@ router.get("/stream", async (req, res) => {
     audioStream.data.pipe(res);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Erro ao streamar áudio" });
+    res.status(500).json({ error: err });
   }
 });
 
