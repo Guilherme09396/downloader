@@ -10,27 +10,17 @@ const axiosInstance = axios.create({
   timeout: 20000,
 });
 
+// cache de URL de áudio por vídeo
 const streamCache = new Map();
-const STREAM_TTL = 1000 * 60 * 10;
-
-const MAX_CACHE_SIZE = 100;
-
-function enforceCacheLimit() {
-  if (streamCache.size > MAX_CACHE_SIZE) {
-    const firstKey = streamCache.keys().next().value;
-    streamCache.delete(firstKey);
-  }
-}
+const STREAM_TTL = 1000 * 60 * 10; // 10 minutos
 
 function getCachedStream(url) {
   const item = streamCache.get(url);
   if (!item) return null;
-
   if (Date.now() > item.expire) {
     streamCache.delete(url);
     return null;
   }
-
   return item.audioUrl;
 }
 
@@ -39,8 +29,6 @@ function setCachedStream(url, audioUrl) {
     audioUrl,
     expire: Date.now() + STREAM_TTL,
   });
-
-  enforceCacheLimit();
 }
 
 const searchCache = new Map();
@@ -87,6 +75,7 @@ router.get("/download", async (req, res) => {
       output: "-",
 
       noWarnings: true,
+      noCallHome: true,
     });
 
     stream.stdout.pipe(res);
@@ -109,6 +98,7 @@ router.post("/info", async (req, res) => {
     const info = await ytDlp(url, {
       dumpSingleJson: true,
       noWarnings: true,
+      noCallHome: true,
     });
 
     res.json({
@@ -127,59 +117,30 @@ router.post("/search", async (req, res) => {
   const { query } = req.body;
 
   if (!query) {
-    return res.status(400).json({ error: "Query obrigatória" });
+    return res.status(400).json({ error: "É necessário informar o query" });
   }
 
   const cached = searchCache.get(query);
+
   if (cached && Date.now() < cached.expire) {
     return res.json(cached.data);
   }
 
   try {
-    // 🔥 PRIMEIRA TENTATIVA (normal)
-    let results;
+    const results = await ytDlp(`ytsearch5:${query}`, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCallHome: true,
+    });
 
-    try {
-      results = await ytDlp(`ytsearch5:${query}`, {
-        dumpSingleJson: true,
-        noWarnings: true,
-      });
-    } catch (err) {
-      console.log("⚠️ yt-dlp falhou, fallback ativado");
-
-      // 🔥 FALLBACK: usa Invidious API (anti-bloqueio)
-      const response = await axios.get(
-        `https://yt.artemislena.eu/api/v1/search?q=${encodeURIComponent(query)}`
-      );
-
-      const tracks = response.data.slice(0, 5).map((item) => ({
-        id: item.videoId,
-        title: item.title,
-        artist: item.author,
-        duration: item.lengthSeconds,
-        thumbnail: item.videoThumbnails?.[0]?.url,
-        url: `https://www.youtube.com/watch?v=${item.videoId}`,
-      }));
-
-      searchCache.set(query, {
-        data: tracks,
-        expire: Date.now() + SEARCH_TTL,
-      });
-
-      return res.json(tracks);
-    }
-
-    // 🔥 parse normal
-    const tracks = results.entries
-      .filter(Boolean)
-      .map((item) => ({
-        id: item.id,
-        title: item.title,
-        artist: item.uploader,
-        duration: item.duration,
-        thumbnail: item.thumbnail,
-        url: item.webpage_url,
-      }));
+    const tracks = results.entries.map((item) => ({
+      id: item.id,
+      title: item.title,
+      artist: item.uploader,
+      duration: item.duration,
+      thumbnail: item.thumbnail,
+      url: item.webpage_url,
+    }));
 
     searchCache.set(query, {
       data: tracks,
@@ -188,8 +149,8 @@ router.post("/search", async (req, res) => {
 
     res.json(tracks);
   } catch (err) {
-    console.error("Erro total:", err);
-    res.status(500).json({ error: "Erro na busca" });
+    console.error(err);
+    res.status(500).json({ error: err });
   }
 });
 
@@ -197,62 +158,41 @@ router.post("/search", async (req, res) => {
 router.get("/stream", async (req, res) => {
   try {
     const { url } = req.query;
+
     if (!url) {
       return res.status(400).json({ error: "URL não fornecida" });
     }
 
     const range = req.headers.range;
 
-    let audioUrl;
+    // tenta pegar do cache
+    let audioUrl = getCachedStream(url);
 
-    // 🔥 1. TENTA PEGAR DO CACHE
-    const cached = getCachedStream(url);
+    if (!audioUrl) {
+      const result = await ytDlp.exec(url, {
+        format: "bestaudio",
+        getUrl: true,
+        noWarnings: true,
 
-    if (cached) {
-      audioUrl = cached;
-    } else {
-      try {
-        const result = await ytDlp.exec(url, {
-          getUrl: true,
-          noWarnings: true,
-        });
+        extractorArgs: "youtube:player_client=android",
 
-        audioUrl = result.stdout.trim();
+        addHeader: [
+          "user-agent: Mozilla/5.0",
+          "accept-language: en-US,en;q=0.9"
+        ]
+      });
 
-        // salva cache
-        setCachedStream(url, audioUrl);
-
-      } catch (err) {
-        console.log("⚠️ yt-dlp falhou, usando fallback");
-
-        const videoId = url.split("v=")[1];
-        audioUrl = `https://inv.nadeko.net/latest_version?id=${videoId}&itag=251`;
-      }
+      audioUrl = result.stdout.trim();
+      setCachedStream(url, audioUrl);
     }
 
-    // 🔥 2. HEADERS ANTI-BLOQUEIO (CRÍTICO)
-    const headers = {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-      Accept: "*/*",
-      "Accept-Language": "en-US,en;q=0.9",
-      Referer: "https://www.youtube.com/",
-      Origin: "https://www.youtube.com",
-      Connection: "keep-alive",
-    };
-
-    // adiciona range se existir
-    if (range) {
-      headers.Range = range;
-    }
-
-    // 🔥 3. STREAM REAL
-    const audioStream = await axiosInstance.get(audioUrl, {
+    const audioStream = await axiosInstance({
+      method: "GET",
+      url: audioUrl,
       responseType: "stream",
-      headers,
+      headers: range ? { Range: range } : {},
     });
 
-    // 🔥 4. HEADERS DE RESPOSTA
     res.setHeader("Content-Type", "audio/webm");
     res.setHeader("Accept-Ranges", "bytes");
 
@@ -265,15 +205,10 @@ router.get("/stream", async (req, res) => {
       res.status(206);
     }
 
-    // 🔥 5. PIPE
     audioStream.data.pipe(res);
-
   } catch (err) {
-    console.error("❌ ERRO STREAM:", err.message);
-
-    res.status(500).json({
-      error: "Erro no streaming",
-    });
+    console.error(err);
+    res.status(500).json({ error: err });
   }
 });
 
