@@ -197,13 +197,16 @@ router.post("/search", async (req, res) => {
 router.get("/stream", async (req, res) => {
   try {
     const { url } = req.query;
-    if (!url) return res.status(400).json({ error: "URL não fornecida" });
+    if (!url) {
+      return res.status(400).json({ error: "URL não fornecida" });
+    }
 
     const range = req.headers.range;
 
-    // 🔥 CACHE
-    const cached = getCachedStream(url);
     let audioUrl;
+
+    // 🔥 1. TENTA PEGAR DO CACHE
+    const cached = getCachedStream(url);
 
     if (cached) {
       audioUrl = cached;
@@ -215,24 +218,41 @@ router.get("/stream", async (req, res) => {
         });
 
         audioUrl = result.stdout.trim();
+
+        // salva cache
         setCachedStream(url, audioUrl);
 
       } catch (err) {
-        console.log("⚠️ yt-dlp falhou, fallback stream");
+        console.log("⚠️ yt-dlp falhou, usando fallback");
 
-        // 🔥 fallback: proxy alternativo
         const videoId = url.split("v=")[1];
         audioUrl = `https://inv.nadeko.net/latest_version?id=${videoId}&itag=251`;
       }
     }
 
-    const audioStream = await axios({
-      method: "GET",
-      url: audioUrl,
+    // 🔥 2. HEADERS ANTI-BLOQUEIO (CRÍTICO)
+    const headers = {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+      Accept: "*/*",
+      "Accept-Language": "en-US,en;q=0.9",
+      Referer: "https://www.youtube.com/",
+      Origin: "https://www.youtube.com",
+      Connection: "keep-alive",
+    };
+
+    // adiciona range se existir
+    if (range) {
+      headers.Range = range;
+    }
+
+    // 🔥 3. STREAM REAL
+    const audioStream = await axiosInstance.get(audioUrl, {
       responseType: "stream",
-      headers: range ? { Range: range } : {},
+      headers,
     });
 
+    // 🔥 4. HEADERS DE RESPOSTA
     res.setHeader("Content-Type", "audio/webm");
     res.setHeader("Accept-Ranges", "bytes");
 
@@ -245,10 +265,12 @@ router.get("/stream", async (req, res) => {
       res.status(206);
     }
 
+    // 🔥 5. PIPE
     audioStream.data.pipe(res);
 
   } catch (err) {
-    console.error(err);
+    console.error("❌ ERRO STREAM:", err.message);
+
     res.status(500).json({
       error: "Erro no streaming",
     });
