@@ -24,7 +24,15 @@ function getCachedStream(url) {
   return item.audioUrl;
 }
 
+const MAX_CACHE = 100; // limite de itens no cache
+
 function setCachedStream(url, audioUrl) {
+  // 🔥 remove o mais antigo se passar do limite
+  if (streamCache.size >= MAX_CACHE) {
+    const firstKey = streamCache.keys().next().value;
+    streamCache.delete(firstKey);
+  }
+
   streamCache.set(url, {
     audioUrl,
     expire: Date.now() + STREAM_TTL,
@@ -165,31 +173,56 @@ router.get("/stream", async (req, res) => {
 
     const range = req.headers.range;
 
-    // 🔥 Formato robusto com fallback
-    const result = await ytDlp.exec(url, {
-      format: "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
-      getUrl: true,
-      noWarnings: true,
+    // 🔥 1. TENTA PEGAR DO CACHE
+    let audioUrl = getCachedStream(url);
 
-      // 🔥 ajuda a evitar bloqueio do YouTube
-      extractorArgs: "youtube:player_client=android",
+    if (!audioUrl) {
+      try {
+        const result = await ytDlp.exec(url, {
+          format: "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best",
+          getUrl: true,
+          noWarnings: true,
 
-      addHeader: [
-        "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "accept-language: en-US,en;q=0.9",
-      ],
-    });
+          extractorArgs: "youtube:player_client=android",
 
-    const audioUrl = result.stdout.trim();
+          addHeader: [
+            "user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "accept-language: en-US,en;q=0.9",
+          ],
+        });
 
-    const audioStream = await axios({
+        audioUrl = result.stdout.trim();
+
+        // 🔥 salva no cache
+        setCachedStream(url, audioUrl);
+
+      } catch (err) {
+        console.log("Fallback ativado...");
+
+        // 🔥 fallback extremo
+        const result = await ytDlp.exec(url, {
+          format: "best",
+          getUrl: true,
+        });
+
+        audioUrl = result.stdout.trim();
+        setCachedStream(url, audioUrl);
+      }
+    }
+
+    // 🔥 2. STREAM COM KEEP-ALIVE (mais rápido)
+    const audioStream = await axiosInstance({
       method: "GET",
       url: audioUrl,
       responseType: "stream",
       headers: range ? { Range: range } : {},
     });
 
-    res.setHeader("Content-Type", "audio/webm");
+    // 🔥 detecta tipo real (melhor que fixo)
+    const contentType =
+      audioStream.headers["content-type"] || "audio/mpeg";
+
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Accept-Ranges", "bytes");
 
     if (audioStream.headers["content-length"]) {
@@ -201,7 +234,11 @@ router.get("/stream", async (req, res) => {
       res.status(206);
     }
 
+    // 🔥 resposta mais rápida (buffer flush)
+    res.flushHeaders?.();
+
     audioStream.data.pipe(res);
+
   } catch (err) {
     console.error(err);
 
