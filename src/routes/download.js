@@ -260,6 +260,9 @@ router.post("/info", async (req, res) => {
 // =======================
 // SEARCH
 // =======================
+// =======================
+// SEARCH
+// =======================
 router.post("/search", async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "É necessário informar o query" });
@@ -269,22 +272,27 @@ router.post("/search", async (req, res) => {
 
   try {
     const results = await runYtDlpWithFallback((opts) =>
-      ytDlp(`ytsearch5:${query}`, { ...opts, dumpSingleJson: true })
+      ytDlp(`ytsearch8:${query}`, {
+        ...opts,
+        flatPlaylist: true,
+        dumpSingleJson: true,
+        skipDownload: true,
+      })
     );
 
-    const tracks = results.entries
+    const tracks = (results.entries || [])
       .filter(Boolean)
       .map((item) => ({
         id: item.id,
         title: item.title,
-        artist: item.uploader,
-        duration: item.duration,
-        thumbnail: item.thumbnail,
-        url: item.webpage_url || `https://www.youtube.com/watch?v=${item.id}`,
+        artist: item.uploader || item.channel || "Desconhecido",
+        duration: item.duration || 0,
+        thumbnail: item.thumbnail || `https://i.ytimg.com/vi/${item.id}/hqdefault.jpg`,
+        url: item.url || item.webpage_url || `https://www.youtube.com/watch?v=${item.id}`,
       }));
 
     searchCache.set(query, { data: tracks, expire: Date.now() + SEARCH_TTL });
-    tracks.slice(0, 3).forEach((t) => preFetchAudioUrl(t.url));
+    tracks.slice(0, 2).forEach((t) => preFetchAudioUrl(t.url));
     res.json(tracks);
   } catch (err) {
     console.error(err);
