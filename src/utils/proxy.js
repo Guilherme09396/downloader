@@ -14,7 +14,7 @@ function createSessionId(seed = "") {
 
 function getProxyUrl(sessionId) {
   const session = createSessionId(sessionId);
-  return `http://${PROXY_USER}-session-${session}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}`;
+  return `http://${PROXY_USER}:${PROXY_PASS}@${PROXY_HOST}:${PROXY_PORT}`;
 }
 
 function getProxyAgent(sessionId) {
