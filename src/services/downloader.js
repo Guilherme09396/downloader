@@ -1,16 +1,14 @@
 const ytDlp = require("yt-dlp-exec");
 const path = require("path");
+const { getProxyUrl } = require("../utils/proxy");
 
-async function downloadMusic(url) {
+async function downloadMusic(url, sessionId = "default") {
   const output = path.join(__dirname, "../downloads/%(title)s.%(ext)s");
 
   await ytDlp(url, {
     extractAudio: true,
     audioFormat: "mp3",
-    audioQuality: 0,
-    addMetadata: true,
-    writeThumbnail: true,
-    embedThumbnail: true,
+    proxy: getProxyUrl(sessionId),
     output,
   });
 
